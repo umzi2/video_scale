@@ -1,9 +1,15 @@
 //! Split a video stream into windows of `chunk` frames for a recurrent model,
 //! optionally cross-fading the frames that neighbouring windows predict twice.
+//!
+//! The model output stays planar (`[t, 3, 2h, 2w]` fp16): overlapping frames are
+//! blended in f32 planes and only the final quantisation interleaves channels.
 
 use anyhow::{Result, bail};
+use half::f16;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+
+use crate::convert::{accumulate_planes, blend_to_u8, planes_to_u8, store_planes};
 
 /// Fill `buf` with whole frames from `source`; returns how many frames arrived.
 fn fill(source: &mut impl Read, buf: &mut [u8], frame: usize) -> Result<usize> {
@@ -27,13 +33,14 @@ pub fn process(
     height: usize,
     chunk: usize,
     overlap: usize,
-    mut infer: impl FnMut(&[u8], &mut Vec<f32>) -> Result<()>,
+    mut infer: impl FnMut(&[u8], &mut Vec<f16>) -> Result<()>,
 ) -> Result<()> {
     if width == 0 || height == 0 || overlap >= chunk {
         bail!("expected positive dimensions and 0 <= overlap < chunk_size");
     }
     let frame = width * height * 3;
-    let out_frame = frame * 4;
+    let plane = 4 * width * height;
+    let out_frame = 3 * plane;
     let stride = chunk - overlap;
     // sin² ramp: complementary weights for the two halves of an overlap.
     let ramp: Vec<f32> = (1..=overlap)
@@ -45,7 +52,7 @@ pub fn process(
         .collect();
     // Real frames plus one lookahead frame telling a full final window from a successor.
     let mut window = vec![0u8; (chunk + 1) * frame];
-    let mut result = Vec::new();
+    let mut result: Vec<f16> = Vec::new();
     let mut out = vec![0u8; out_frame];
     let mut pending: VecDeque<(Vec<f32>, f32)> = VecDeque::new();
     let mut used = 0;
@@ -58,8 +65,7 @@ pub fn process(
         let more = used > chunk;
         let valid = used.min(chunk);
         if valid < chunk {
-            let last = ((valid - 1) * frame)..(valid * frame);
-            let last = window[last].to_vec();
+            let last = window[(valid - 1) * frame..valid * frame].to_vec();
             for slot in window[valid * frame..chunk * frame].chunks_mut(frame) {
                 slot.copy_from_slice(&last);
             }
@@ -83,31 +89,25 @@ pub fn process(
             if keep {
                 weight *= ramp[chunk - 1 - i];
             }
-            let rgb = &result[i * out_frame..(i + 1) * out_frame];
-            let (pixels, total) = if i < carried || keep {
-                let mut blend = rgb.to_vec();
-                if weight != 1.0 {
-                    blend.iter_mut().for_each(|p| *p *= weight);
-                }
-                let mut total = weight;
-                if i < carried {
-                    let (previous, previous_weight) = pending.pop_front().unwrap();
-                    blend.iter_mut().zip(previous).for_each(|(p, q)| *p += q);
-                    total += previous_weight;
-                }
+            let planes = &result[i * out_frame..(i + 1) * out_frame];
+            if i < carried {
+                let (mut blend, previous_weight) = pending.pop_front().unwrap();
+                accumulate_planes(&mut blend, planes, weight);
+                let total = previous_weight + weight;
                 if keep {
                     pending.push_back((blend, total));
-                    continue;
+                } else {
+                    blend_to_u8(&blend, 1.0 / total, &mut out);
+                    sink.write_all(&out)?;
                 }
-                (blend, total)
+            } else if keep {
+                let mut blend = vec![0.0; out_frame];
+                store_planes(planes, weight, &mut blend);
+                pending.push_back((blend, weight));
             } else {
-                (rgb.to_vec(), 1.0)
-            };
-            let scale = 1.0 / total;
-            for (dst, src) in out.iter_mut().zip(pixels) {
-                *dst = (src * scale * 255.0).clamp(0.0, 255.0).round() as u8;
+                planes_to_u8(planes, 1.0, &mut out);
+                sink.write_all(&out)?;
             }
-            sink.write_all(&out)?;
         }
         if !more {
             return Ok(());
@@ -122,13 +122,27 @@ pub fn process(
 mod tests {
     use super::*;
 
-    fn upscale(frames: &[u8], width: usize, height: usize) -> Vec<f32> {
+    /// 2x nearest-neighbour upscale of one RGB24 frame, as fp16 planes.
+    fn upscale(frames: &[u8], width: usize, height: usize) -> Vec<f16> {
+        let mut out = Vec::with_capacity(frames.len() * 4);
+        for c in 0..3 {
+            for y in 0..height * 2 {
+                for x in 0..width * 2 {
+                    let v = frames[((y / 2) * width + x / 2) * 3 + c];
+                    out.push(f16::from_f32(v as f32 / 255.0));
+                }
+            }
+        }
+        out
+    }
+
+    /// Expected RGB24 bytes: the same 2x nearest-neighbour upscale.
+    fn expected(frames: &[u8], width: usize, height: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(frames.len() * 4);
         for y in 0..height * 2 {
             for x in 0..width * 2 {
                 for c in 0..3 {
-                    let v = frames[((y / 2) * width + x / 2) * 3 + c];
-                    out.push(v as f32 / 255.0);
+                    out.push(frames[((y / 2) * width + x / 2) * 3 + c]);
                 }
             }
         }
@@ -185,17 +199,13 @@ mod tests {
                 assert_eq!(
                     sink,
                     (0..length)
-                        .flat_map(
-                            |f| upscale(&frames[f * frame..(f + 1) * frame], width, height)
-                                .into_iter()
-                                .map(|v| (v * 255.0).round() as u8)
-                        )
+                        .flat_map(|f| expected(&frames[f * frame..(f + 1) * frame], width, height))
                         .collect::<Vec<u8>>()
                 );
                 let expected_calls = if length == 0 {
                     0
                 } else {
-                    1 + (length.saturating_sub(chunk) + stride - 1) / stride
+                    1 + length.saturating_sub(chunk).div_ceil(stride)
                 };
                 assert_eq!(calls, expected_calls);
                 assert_eq!(sink.len(), length * frame * 4);
@@ -210,7 +220,7 @@ mod tests {
         let values = [0.0f32, 1.0];
         let mut call = 0;
         process(&mut source, &mut sink, 1, 1, 5, 3, |_, dst| {
-            dst.extend(std::iter::repeat_n(values[call], 5 * 4 * 3));
+            dst.extend(std::iter::repeat_n(f16::from_f32(values[call]), 5 * 4 * 3));
             call += 1;
             Ok(())
         })
@@ -242,7 +252,7 @@ mod tests {
             let mut call = 0;
             process(&mut source, &mut sink, 1, 1, 4, 3, |_, dst| {
                 dst.extend(std::iter::repeat_n(
-                    if call == active { 1.0 } else { 0.0 },
+                    f16::from_f32(if call == active { 1.0 } else { 0.0 }),
                     4 * 4 * 3,
                 ));
                 call += 1;
@@ -267,9 +277,10 @@ mod tests {
         let mut source: &[u8] = &[0u8; 3 * 3];
         let mut call = 0;
         process(&mut source, &mut sink, 1, 1, 2, 1, |_, dst| {
-            let color = colors[call];
             for _ in 0..2 {
-                dst.extend(color.iter().flat_map(|c| std::iter::repeat_n(*c, 4)));
+                for c in colors[call] {
+                    dst.extend(std::iter::repeat_n(f16::from_f32(c), 4));
+                }
             }
             call += 1;
             Ok(())
@@ -277,7 +288,7 @@ mod tests {
         .unwrap();
         let expected: Vec<u8> = [[0u8, 255, 1], [64, 191, 1], [191, 64, 2]]
             .iter()
-            .flat_map(|row| row.iter().flat_map(|v| std::iter::repeat_n(*v, 4)))
+            .flat_map(|pixel| (0..4).flat_map(move |_| pixel.iter().copied()))
             .collect();
         assert_eq!(sink, expected);
     }

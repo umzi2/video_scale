@@ -1,5 +1,6 @@
 /target
-/.trt-cache/
-/.run/
+/.run
+/.trt-cache
 /test_video_2x.mp4
 /test_video_2x_lossless.mkv
+*.onnx
