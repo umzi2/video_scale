@@ -1,0 +1,19 @@
+# cargo run --release -- lossless.toml
+# Кадры модели сохраняются побитово: FFV1 в Matroska, 8-bit RGB без субдискретизации.
+# Аудио копируется из исходника без перекодирования. Файл заметно больше lossy-версии.
+input = "test_video.mp4"
+output = "test_video_2x_lossless.mkv"
+model = "2x_umzi_anime_smovsr_fp16.onnx"
+lib_dir = ".run/nvidia/lib"          # Каталог с CUDA/cuDNN/TensorRT; не нужен при системной установке.
+cache_dir = ".trt-cache"
+chunk_size = 30
+overlap = 4
+
+[encode]
+codec = "ffv1"
+pixel_format = "bgr0"                 # FFV1 хранит 8-bit RGB без потерь; bgr0 — его внутренний формат.
+audio = "copy"
+
+# Контроль целостности слайсов при декодировании.
+[encode.options]
+slicecrc = "1"
