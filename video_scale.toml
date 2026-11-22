@@ -1,0 +1,21 @@
+# cargo run --release -- video_scale.toml
+# Относительные пути отсчитываются от этого файла. Готовый output не перезаписывается.
+input = "test_video.mp4"
+output = "test_video_2x.mp4"       # Контейнер определяется расширением (.mp4, .mkv, ...).
+model = "2x_umzi_anime_smovsr_fp16.onnx"
+# Каталог с libcudart/libcublas/libcudnn/libnvinfer; не нужен, если они уже в LD_LIBRARY_PATH.
+lib_dir = ".run/nvidia/lib"
+cache_dir = ".trt-cache"           # Первый запуск собирает TensorRT engine для размера кадра и T.
+chunk_size = 5                      # T: число кадров на один вызов модели.
+overlap = 2                         # От 0 до T-1. 0 — без перекрытия.
+
+[encode]
+codec = "libx264"
+pixel_format = "yuv420p"
+audio = "copy"                      # copy, none или имя кодека FFmpeg, например aac.
+
+# Параметры FFmpeg для выбранного кодека и контейнера, без начального дефиса.
+# Частота вывода постоянная, равна средней частоте исходного видео.
+[encode.options]
+crf = "18"
+preset = "fast"
