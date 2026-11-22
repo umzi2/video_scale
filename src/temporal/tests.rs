@@ -29,7 +29,7 @@ fn expected(frames: &[u8], width: usize, height: usize) -> Vec<u8> {
 
 #[test]
 fn schedule_padding_and_exact_frames() {
-    for (chunk, overlap) in [(1, 0), (4, 0), (4, 2), (4, 3)] {
+    for (chunk, overlap) in [(1, 0), (4, 0), (4, 1), (4, 2), (4, 3)] {
         for length in 0..14 {
             let (width, height) = (3, 2);
             let frame = width * height * 3;

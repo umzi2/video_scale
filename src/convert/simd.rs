@@ -15,6 +15,7 @@ pub(super) fn available() -> bool {
 }
 
 /// `t` RGB24 frames into `[t, 3, h, w]` fp16; see [`super::to_nchw`].
+#[target_feature(enable = "avx2,f16c")]
 pub(super) unsafe fn to_nchw(
     frames: &[u8],
     width: usize,
@@ -60,6 +61,7 @@ pub(super) unsafe fn to_nchw(
 }
 
 /// `out = planes * weight` (`add = false`) or `out += planes * weight`.
+#[target_feature(enable = "avx2,f16c")]
 pub(super) unsafe fn weighted(planes: &[f16], weight: f32, out: &mut [f32], add: bool) {
     // SAFETY: the caller checked AVX2/F16C and sized both buffers equally.
     unsafe {
@@ -84,6 +86,7 @@ pub(super) unsafe fn weighted(planes: &[f16], weight: f32, out: &mut [f32], add:
 }
 
 /// Quantises 16 fp16 pixels into interleaved RGB24; returns the pixels written.
+#[target_feature(enable = "avx2,f16c")]
 pub(super) unsafe fn interleave_f16(channels: [&[f16]; 3], scale: f32, out: &mut [u8]) -> usize {
     // SAFETY: the caller checked AVX2/F16C; `channels` cover `out.len() / 3` pixels.
     unsafe {
@@ -106,6 +109,7 @@ pub(super) unsafe fn interleave_f16(channels: [&[f16]; 3], scale: f32, out: &mut
 }
 
 /// Quantises 16 f32 pixels into interleaved RGB24; returns the pixels written.
+#[target_feature(enable = "avx2")]
 pub(super) unsafe fn interleave_f32(channels: [&[f32]; 3], scale: f32, out: &mut [u8]) -> usize {
     // SAFETY: the caller checked AVX2; `channels` cover `out.len() / 3` pixels.
     unsafe {

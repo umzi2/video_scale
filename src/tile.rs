@@ -2,8 +2,8 @@
 //!
 //! The frame is divided into as few tiles as the allowed tile size permits.
 //! Neighbouring tiles overlap, and inside the overlap the two tiles contribute
-//! `sin²`/`cos²` weights that sum to one, so no seam is visible. Tile edges are
-//! aligned to eight pixels, which keeps TensorRT free to vectorise them.
+//! `sin²`/`cos²` weights that sum to one, so no seam is visible. Tile sizes
+//! and interior offsets use eight-pixel alignment where coverage permits.
 //!
 //! The layout depends only on the frame geometry, so it is computed once and the
 //! model session is compiled for that tile size.
@@ -130,13 +130,24 @@ fn starts(dim: usize, tile: usize) -> Vec<usize> {
         return vec![0];
     }
     let span = dim - tile;
-    // Fewest tiles that cover the axis: each one adds at most `tile` pixels.
-    let count = dim.div_ceil(tile);
-    let mut starts = Vec::with_capacity(count);
-    for index in 0..count - 1 {
-        let aligned = span * index / (count - 1) / ALIGN * ALIGN;
-        let lower = starts.last().map_or(0, |last| last + 1);
-        starts.push(aligned.max(lower).min(span.saturating_sub(1)));
+    // Each additional tile must share at least one pixel with its predecessor.
+    let stride = tile - 1;
+    let steps = span.div_ceil(stride);
+    let mut starts = Vec::with_capacity(steps + 1);
+    starts.push(0);
+    for index in 1..steps {
+        // Stay within one step of the previous tile and within reach of the end.
+        let previous = starts[index - 1];
+        let lower = (previous + 1).max(span - (steps - index) * stride);
+        let upper = (previous + stride).min(span - (steps - index));
+        let ideal = ((span as u128 * index as u128) / steps as u128) as usize;
+        let first_aligned = lower.next_multiple_of(ALIGN);
+        let last_aligned = upper / ALIGN * ALIGN;
+        starts.push(if first_aligned <= last_aligned {
+            (ideal / ALIGN * ALIGN).clamp(first_aligned, last_aligned)
+        } else {
+            ideal.clamp(lower, upper)
+        });
     }
     starts.push(span);
     starts
@@ -156,8 +167,8 @@ mod tests {
                 if tile_w < width {
                     assert_eq!(tile_w % ALIGN, 0, "{width} {max_tile}");
                 }
-                let columns = width.div_ceil(tile_w);
-                let rows = height.div_ceil(tile_h);
+                let columns = 1 + (width - tile_w).div_ceil(tile_w - 1);
+                let rows = 1 + (height - tile_h).div_ceil(tile_h - 1);
                 let tiles = plan.tiles();
                 assert_eq!(
                     tiles.len(),
@@ -166,6 +177,28 @@ mod tests {
                 );
                 assert!(tiles.iter().all(|tile| tile.x + tile.width <= width));
                 assert!(tiles.iter().all(|tile| tile.y + tile.height <= height));
+            }
+        }
+    }
+
+    #[test]
+    fn axis_starts_cover_exact_multiples_and_nearby_lengths() {
+        assert_eq!(starts(640, 256), [0, 192, 384]);
+        assert_eq!(starts(360, 256), [0, 104]);
+        assert_eq!(starts(511, 256), [0, 255]);
+        assert_eq!(starts(512, 256), [0, 128, 256]);
+        assert_eq!(starts(766, 256), [0, 255, 510]);
+        for tile in [8, 16, 64, 256] {
+            for dim in tile + 1..=4 * tile + 1 {
+                let offsets = starts(dim, tile);
+                assert_eq!(offsets[0], 0);
+                assert_eq!(offsets.last(), Some(&(dim - tile)));
+                assert!(
+                    offsets
+                        .windows(2)
+                        .all(|p| p[0] < p[1] && p[1] - p[0] < tile)
+                );
+                assert!(tile + (offsets.len() - 2) * (tile - 1) < dim);
             }
         }
     }

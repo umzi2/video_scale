@@ -114,46 +114,6 @@ struct Blended {
     weight: f32,
 }
 
-/// Frames waiting for the next window, in output order.
-#[derive(Default)]
-struct BlendQueue {
-    frames: VecDeque<Blended>,
-}
-
-impl BlendQueue {
-    fn len(&self) -> usize {
-        self.frames.len()
-    }
-
-    /// Adds one window's view of the next queued frame.
-    ///
-    /// Returns the frame once no later window can contribute to it.
-    fn merge(&mut self, planes: &[f16], weight: f32, keep: bool) -> Option<Blended> {
-        let mut blended = self
-            .frames
-            .pop_front()
-            .expect("merge only called for a queued frame");
-        accumulate_planes(&mut blended.planes, planes, weight);
-        blended.weight += weight;
-        if keep {
-            self.frames.push_back(blended);
-            None
-        } else {
-            Some(blended)
-        }
-    }
-
-    /// Starts a pending frame from the first window that sees it.
-    fn start(&mut self, planes: &[f16], weight: f32) {
-        let mut accumulated = vec![0.0; planes.len()];
-        scale_planes(planes, weight, &mut accumulated);
-        self.frames.push_back(Blended {
-            planes: accumulated,
-            weight,
-        });
-    }
-}
-
 /// Reads whole frames into `buf`; returns how many arrived.
 fn read_frames(source: &mut impl Read, buf: &mut [u8], frame: usize) -> Result<usize> {
     let mut read = 0;
@@ -171,9 +131,10 @@ fn read_frames(source: &mut impl Read, buf: &mut [u8], frame: usize) -> Result<u
 
 /// Repeats the last available frame into the rest of a short window.
 fn pad_short_window(window: &mut [u8], valid: usize, chunk: usize, frame: usize) {
-    let last = window[(valid - 1) * frame..valid * frame].to_vec();
-    for slot in window[valid * frame..chunk * frame].chunks_mut(frame) {
-        slot.copy_from_slice(&last);
+    let (loaded, padding) = window[..chunk * frame].split_at_mut(valid * frame);
+    let last = &loaded[loaded.len() - frame..];
+    for slot in padding.chunks_exact_mut(frame) {
+        slot.copy_from_slice(last);
     }
 }
 
@@ -217,7 +178,7 @@ pub fn process(
     let mut first = true;
     let mut result: Vec<f16> = Vec::new();
     let mut out = vec![0u8; out_frame];
-    let mut queue = BlendQueue::default();
+    let mut queue = VecDeque::<Blended>::new();
 
     loop {
         loaded += read_frames(source, &mut window[loaded * frame..], frame)?;
@@ -245,11 +206,28 @@ pub fn process(
             let keep = crossfade.carries(index, more);
             let weight = crossfade.weight(index, first, more);
             if index < carried {
-                if let Some(blended) = queue.merge(planes, weight, keep) {
+                let mut blended = queue.pop_front().unwrap();
+                accumulate_planes(&mut blended.planes, planes, weight);
+                blended.weight += weight;
+                if !keep {
                     emit_blended(&blended, &mut out, sink)?;
                 }
+                // Completed frames precede still-pending ones on the next pass
+                // through the queue; reuse their storage for the new tail below.
+                if more {
+                    queue.push_back(blended);
+                }
             } else if keep {
-                queue.start(planes, weight);
+                let mut accumulated = if first {
+                    vec![0.0; out_frame]
+                } else {
+                    queue.pop_front().unwrap().planes
+                };
+                scale_planes(planes, weight, &mut accumulated);
+                queue.push_back(Blended {
+                    planes: accumulated,
+                    weight,
+                });
             } else {
                 emit_planes(planes, &mut out, sink)?;
             }

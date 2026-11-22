@@ -19,11 +19,11 @@ fn nchw_reference(frames: &[u8], width: usize, height: usize, t: usize) -> Vec<f
 
 #[test]
 fn nchw_matches_reference() {
+    let mut planes = Vec::new();
     for (width, height, t) in [(13, 7, 2), (1, 1, 1), (16, 3, 1), (5, 3, 3)] {
         let frames: Vec<u8> = (0..t * width * height * 3)
             .map(|i| (i * 31 % 251) as u8)
             .collect();
-        let mut planes = Vec::new();
         to_nchw(&frames, width, height, t, &mut planes);
         assert_eq!(planes, nchw_reference(&frames, width, height, t));
     }
@@ -60,7 +60,7 @@ fn pixels_round_trip_through_planes() {
 
 #[test]
 fn interleave_matches_scalar() {
-    let pixels = 5 * 3;
+    let pixels = 19;
     let planes: Vec<f16> = (0..3 * pixels)
         .map(|i| f16::from_f32(((i * 37) % 256) as f32 / 255.0))
         .collect();
@@ -71,6 +71,11 @@ fn interleave_matches_scalar() {
         assert_eq!(vector[i * 3 + 1], quantise(planes[pixels + i].to_f32()));
         assert_eq!(vector[i * 3 + 2], quantise(planes[2 * pixels + i].to_f32()));
     }
+    let expected = vector.clone();
+    vector.fill(0xff);
+    let floats: Vec<_> = planes.iter().map(|v| v.to_f32()).collect();
+    blend_to_u8(&floats, 1.0, &mut vector);
+    assert_eq!(vector, expected);
 }
 
 #[test]

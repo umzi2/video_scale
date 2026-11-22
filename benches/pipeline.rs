@@ -43,12 +43,13 @@ fn convert_benches(c: &mut Criterion) {
     let mut rgb = vec![0u8; out_frame];
 
     let mut g = c.benchmark_group("convert");
-    g.throughput(Throughput::Bytes((T * frame * 3 + T * frame) as u64));
+    // Read one RGB24 byte and write one fp16 value per channel sample.
+    g.throughput(Throughput::Bytes((T * frame * 3) as u64));
     g.bench_function("rgb24_to_nchw", |b| {
         b.iter(|| convert::to_nchw(&frames, W, H, T, &mut nchw))
     });
 
-    g.throughput(Throughput::Bytes((4 * out_frame) as u64));
+    g.throughput(Throughput::Bytes((4 * planes.len()) as u64));
     g.bench_function("copy_output_planes", |b| {
         b.iter(|| {
             nchw.clear();
@@ -139,10 +140,11 @@ fn tensorrt_bench(c: &mut Criterion) {
     for _ in 0..iters {
         upscaler.infer(&frames, &mut out).unwrap();
     }
-    let window = start.elapsed().as_secs_f64() / iters as f64;
-    let per_frame = window / t as f64;
+    let window_seconds = start.elapsed().as_secs_f64() / iters as f64;
+    let per_frame = window_seconds / t as f64;
     println!(
-        "\n[T={t}] window {window:.2} ms, {:.3} ms per frame, {:.1} frames/s, 2160 frames ~ {:.1} s",
+        "\n[T={t}] window {:.2} ms, {:.3} ms per frame, {:.1} frames/s, 2160 frames (no overlap) ~ {:.1} s",
+        window_seconds * 1e3,
         per_frame * 1e3,
         1.0 / per_frame,
         per_frame * 2160.0

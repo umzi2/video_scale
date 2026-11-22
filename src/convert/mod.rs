@@ -33,8 +33,7 @@ pub fn to_nchw(frames: &[u8], width: usize, height: usize, t: usize, out: &mut V
         t * frame_len(width, height),
         "expected {t} RGB24 frames of {width}x{height}"
     );
-    out.clear();
-    out.resize(t * 3 * width * height, f16::ZERO);
+    out.resize(frames.len(), f16::ZERO);
 
     #[cfg(target_arch = "x86_64")]
     if simd::available() {
@@ -146,10 +145,10 @@ fn split_channels<'a, T>(planes: &'a [T], out: &[u8]) -> [&'a [T]; 3] {
 }
 
 /// Interleaves and quantises channels from pixel `skip` on.
-fn interleave<T: Sample>(channels: [&[T]; 3], scale: f32, out: &mut [u8], skip: usize) {
+fn interleave<T: Copy + Into<f32>>(channels: [&[T]; 3], scale: f32, out: &mut [u8], skip: usize) {
     for i in skip..out.len() / 3 {
         for (channel, plane) in channels.iter().enumerate() {
-            out[i * 3 + channel] = quantise(plane[i].to_f32() * scale);
+            out[i * 3 + channel] = quantise(plane[i].into() * scale);
         }
     }
 }
@@ -158,23 +157,4 @@ fn interleave<T: Sample>(channels: [&[T]; 3], scale: f32, out: &mut [u8], skip: 
 #[inline]
 fn quantise(value: f32) -> u8 {
     (value * 255.0).clamp(0.0, 255.0).round() as u8
-}
-
-/// A plane sample that can be read as f32.
-trait Sample: Copy {
-    fn to_f32(self) -> f32;
-}
-
-impl Sample for f16 {
-    #[inline]
-    fn to_f32(self) -> f32 {
-        f16::to_f32(self)
-    }
-}
-
-impl Sample for f32 {
-    #[inline]
-    fn to_f32(self) -> f32 {
-        self
-    }
 }
