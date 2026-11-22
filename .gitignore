@@ -1,6 +1,20 @@
+# Build output
 /target
+
+# Local run artifacts: downloaded CUDA/TensorRT libraries, TensorRT engine cache,
+# decoded frames and raw dumps used while checking results
 /.run
 /.trt-cache
+/frames
+*.nut
+*.raw
+
+# Results of the shipped example configs
 /test_video_2x.mp4
 /test_video_2x_lossless.mkv
-*.onnx
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -62,7 +62,7 @@ fn convert_benches(c: &mut Criterion) {
             for f in 0..T {
                 let p = &planes[f * out_frame..(f + 1) * out_frame];
                 let o = &mut weighted[f * out_frame..(f + 1) * out_frame];
-                convert::store_planes(p, 0.37, o);
+                convert::scale_planes(p, 0.37, o);
             }
         })
     });

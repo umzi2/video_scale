@@ -1,58 +1,109 @@
 # video_scale
 
-CLI for 2x video upscaling with a recurrent VSR ONNX model (`2x_umzi_anime_smovsr_fp16.onnx`)
-executed through ONNX Runtime's TensorRT EP (fp16).
+CLI-апскейлер видео в 2 раза на рекуррентной VSR-модели (`2x_umzi_anime_smovsr_fp16.onnx`).
+Модель исполняется через ONNX Runtime с TensorRT (fp16), кадры ходят через FFmpeg по пайпам.
 
+- окно из `T` кадров на один вызов модели, перекрытие между окнами настраивается (в том числе 0);
+- перекрывающиеся кадры не выбрасываются, а смешиваются по синусоидальному кроссфейду;
+- смешивание идёт в fp16/f32 плоскостях модели, в 8-бит переводится только готовый кадр;
+- готовый файл появляется атомарно: при ошибке промежуточный файл удаляется, существующий не перезаписывается.
+
+## Требования
+
+- NVIDIA GPU и TensorRT 11 (первый запуск компилирует движок под размер кадра и `T`).
+- `ffmpeg` и `ffprobe` в `PATH`.
+- Rust 1.88+ (edition 2024) для сборки.
+
+`ort` скачивает свои CUDA/cuDNN/TensorRT библиотеки при первой сборке. Если они уже стоят
+системно, `lib_dir` в конфиге не нужен; иначе укажите каталог с ними — программа один раз
+перезапустит себя с дополненным `LD_LIBRARY_PATH` (загрузчик читает его только при старте).
+
+## Сборка и запуск
+
+```bash
+cargo build --release
+cargo run --release -- video_scale.toml      # или ./target/release/video_scale video_scale.toml
 ```
-video_scale [CONFIG.toml]      # default: video_scale.toml
-```
 
-Paths inside the config are resolved relative to the config file. Video is decoded and encoded by
-FFmpeg over pipes (RGB24 both ways); audio is copied by default.
+Аргумент — путь к конфигу, по умолчанию `video_scale.toml`. `--help` печатает подсказку.
+Все относительные пути в конфиге считаются от каталога конфига.
 
-## Config
+## Конфиг
 
 ```toml
 input = "test_video.mp4"
-output = "test_video_2x.mp4"
+output = "test_video_2x.mp4"        # контейнер задаётся расширением
 model = "2x_umzi_anime_smovsr_fp16.onnx"
-chunk_size = 5          # T frames per model call
-overlap = 2             # 0 <= overlap < chunk_size
-cache_dir = ".trt-cache" # TensorRT engine cache, keyed by GPU/model/shape/runtime
-# lib_dir = "/path/to/cuda-cudnn-tensorrt/libs"  # else the runtime must be findable via LD_LIBRARY_PATH
+cache_dir = ".trt-cache"            # кэш TensorRT-движка
+chunk_size = 5                      # T — кадров на вызов модели
+overlap = 2                         # 0 <= overlap < chunk_size
+# lib_dir = ".run/nvidia/lib"       # каталог с CUDA/cuDNN/TensorRT, если они не системные
 
 [encode]
-codec = "libx264"
+codec = "libx264"                   # любой видеокодек FFmpeg
 pixel_format = "yuv420p"
-audio = "copy"          # "none" drops audio
-[encode.options]        # any extra FFmpeg flags
+audio = "copy"                      # copy | none | имя аудиокодека
+
+[encode.options]                    # дополнительные флаги FFmpeg без ведущего дефиса
 crf = "18"
+preset = "fast"
 ```
 
-## Chunking
+| Поле | Обязательное | Смысл |
+| --- | --- | --- |
+| `input` | да | исходное видео |
+| `output` | да | результат; должен не существовать |
+| `model` | да | ONNX-модель апскейла |
+| `cache_dir` | да | каталог кэша движка TensorRT (создаётся) |
+| `chunk_size` | да | `T`, кадров в окне модели |
+| `overlap` | да | общих кадров у соседних окон, `0` — без перекрытия |
+| `lib_dir` | нет | каталог с CUDA/cuDNN/TensorRT |
+| `encode.codec` | да | видеокодек FFmpeg |
+| `encode.pixel_format` | да | пиксельный формат на выходе |
+| `encode.audio` | да | `copy`, `none` или кодек (например `aac`) |
+| `encode.options` | нет | пары `имя = "значение"` для FFmpeg |
 
-Frames go through the model in windows of `chunk_size` frames with stride
-`chunk_size - overlap`. Overlapping frames are **not dropped**: they are blended with a sin²
-cross-fade (`sin²(π/2 · k/(overlap+1))` over the overlap), so every input frame contributes.
-`overlap = 0` disables blending. Short inputs are zero-padded up to one window and trimmed back.
+Готовые примеры: `video_scale.toml` (h264) и `lossless.toml` (FFV1, без потерь).
 
-Blending happens on the model's fp16 output planes; only the finished frame is quantised to RGB24,
-so no precision is lost while accumulating.
+## Как это работает
 
-## Requirements
+1. `ffprobe` определяет размер кадра и частоту; поворот из метаданных учитывается.
+2. FFmpeg декодирует поток в RGB24 на `stdout`, кадры читаются целыми блоками.
+3. Кадры идут через модель окнами по `T`; шаг между окнами — `T - overlap`.
+   Если в конце остаётся неполное окно, оно добивается последним кадром, а лишние кадры
+   отбрасываются на выходе.
+4. Кадр, попавший в два окна, получает от них веса `sin²(π/2 · k/(overlap+1))` и его
+   дополнение; сумма весов нормализуется, поэтому вклад каждого окна сохраняется.
+   При `overlap = 3` и более один кадр может собрать до четырёх вкладов.
+5. Смешанные плоскости fp16 хранятся как f32, квантуются в RGB24 один раз — на выходе кадра.
+6. FFmpeg кодирует кадры из `stdin` и копирует/перекодирует аудио; результат переносится
+   в целевой путь только после успешного завершения обоих процессов.
 
-- FFmpeg/ffprobe on `PATH`.
-- NVIDIA GPU + TensorRT 11 runtime. `ort` downloads its prebuilt CUDA/cuDNN/TensorRT set on first
-  run; point `lib_dir` at it or put the libraries on `LD_LIBRARY_PATH`.
-- The first run per shape compiles the engine (tens of seconds); later runs load it from `cache_dir`.
+`T` зашит в профиль TensorRT: смена `chunk_size` или размера входного видео пересоберёт движок
+(первый запуск такого варианта дольше, дальше он берётся из `cache_dir`).
 
-## Benchmarks
+## Бенчмарки
 
-Stage-by-stage criterion benchmarks (640x360, T=5, overlap=2):
+Criterion, стадии конвейера по отдельности (640×360, `T = 5`, `overlap = 2`):
 
-```
-cargo bench --bench pipeline                          # CPU stages
+```bash
+cargo bench --bench pipeline                      # CPU-стадии
 BENCH_MODEL=2x_umzi_anime_smovsr_fp16.onnx \
-    cargo bench --bench pipeline -- tensorrt           # + TensorRT inference (24-frame window)
-BENCH_T=5 BENCH_MODEL=... cargo bench --bench pipeline -- tensorrt   # other window size
+    cargo bench --bench pipeline -- tensorrt       # + инференс TensorRT (окно 24 кадра)
+BENCH_T=5 BENCH_MODEL=... cargo bench --bench pipeline -- tensorrt   # другое окно
+```
+
+TensorRT-стадия печатает время окна, мс на кадр, кадров/с и оценку для 2160 кадров.
+
+## Структура
+
+```
+src/main.rs        аргументы, порядок шагов
+src/config.rs      чтение и проверка *.toml
+src/video.rs       ffprobe, стадии FFmpeg, атомарная запись результата
+src/temporal/      окна, кроссфейд, поток кадров (+ тесты)
+src/convert/       RGB24 ↔ плоскости модели; scalar + AVX2-ядра
+src/upscaler.rs    сессия ONNX Runtime (TensorRT, затем CUDA), один вызов модели
+src/model.rs       загрузка ONNX, понижение opset при необходимости
+benches/pipeline.rs  criterion-бенчмарки
 ```
