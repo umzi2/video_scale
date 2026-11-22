@@ -27,3 +27,7 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 [[bench]]
 name = "pipeline"
 harness = false
+
+[profile.release]
+# Ship readable backtraces without the debug sections.
+strip = "debuginfo"

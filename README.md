@@ -1,5 +1,8 @@
 # video_scale
 
+[![CI](https://github.com/umzi2/video_scale/actions/workflows/ci.yml/badge.svg)](https://github.com/umzi2/video_scale/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/umzi2/video_scale)](https://github.com/umzi2/video_scale/releases)
+
 CLI-апскейлер видео в 2 раза на рекуррентной VSR-модели (`2x_umzi_anime_smovsr_fp16.onnx`).
 Модель исполняется через ONNX Runtime с TensorRT (fp16), кадры ходят через FFmpeg по пайпам.
 
