@@ -92,8 +92,12 @@ fn process(settings: &Settings) -> Result<()> {
     let source_video = Video::probe(&input)?;
     let (width, height) = (source_video.width, source_video.height);
     let size = source_video.output_size();
+    let tile = config
+        .tiling
+        .as_ref()
+        .map_or_else(|| "off".to_owned(), |tiling| tiling.max_tile.to_string());
     eprintln!(
-        "{width}x{height} -> {}x{}, {} fps; T={}, overlap={}",
+        "{width}x{height} -> {}x{}, {} fps; T={}, overlap={}, tile={tile}",
         size.0, size.1, source_video.frame_rate, config.chunk_size, config.overlap
     );
 
