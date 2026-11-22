@@ -48,4 +48,10 @@ so no precision is lost while accumulating.
 
 ## Benchmarks
 
-`cargo run --release --bin bench -- --iters 30 --model 2x_umzi_anime_smovsr_fp16.onnx`
+Stage-by-stage criterion benchmarks (640x360, T=5, overlap=2):
+
+```
+cargo bench --bench pipeline                          # CPU stages
+BENCH_MODEL=2x_umzi_anime_smovsr_fp16.onnx \
+    cargo bench --bench pipeline -- tensorrt           # + TensorRT inference
+```
