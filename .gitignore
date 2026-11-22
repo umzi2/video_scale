@@ -1,5 +1,7 @@
 # Build output
 /target
+/notebooks/video_scale.ipynb
+/video_scale_colab.toml
 
 # Local run artifacts: downloaded CUDA/TensorRT libraries, TensorRT engine cache,
 # decoded frames and raw dumps used while checking results

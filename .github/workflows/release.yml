@@ -60,6 +60,12 @@ jobs:
           package="video_scale-${version}-x86_64-linux"
           mkdir -p "dist/${package}"
           install -m 755 target/release/video_scale "dist/${package}/"
+          # Cargo links these into target/release; ship the files, not cache symlinks.
+          for provider in shared cuda tensorrt; do
+            lib="libonnxruntime_providers_${provider}.so"
+            install -m 644 "target/release/$lib" "dist/${package}/$lib"
+            test -s "dist/${package}/$lib"
+          done
           install -m 644 README.md "dist/${package}/"
           install -m 644 video_scale.toml lossless.toml "dist/${package}/"
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"

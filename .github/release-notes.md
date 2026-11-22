@@ -5,6 +5,7 @@ CLI-апскейлер видео в 2 раза на рекуррентной VS
 ### Что в архиве
 
 - `video_scale` — собранный бинарник (x86_64-linux, glibc 2.38+ и libstdc++ из GCC 13+);
+- `libonnxruntime_providers_{shared,cuda,tensorrt}.so` — библиотеки ONNX Runtime этой сборки; оставьте их рядом с бинарником;
 - `README.md` — описание, конфиг, тайлинг, бенчмарки;
 - `video_scale.toml` и `lossless.toml` — готовые примеры конфигов.
 
