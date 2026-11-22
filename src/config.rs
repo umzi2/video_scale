@@ -60,6 +60,9 @@ pub struct Config {
     /// Directory with CUDA/cuDNN/TensorRT libraries, if they are not installed system-wide.
     #[serde(default)]
     pub lib_dir: Option<PathBuf>,
+    /// Optional spatial tiling for frames that do not fit in GPU memory.
+    #[serde(default)]
+    pub tiling: Option<Tiling>,
     pub encode: Encode,
 }
 
@@ -80,11 +83,25 @@ impl Config {
         if self.encode.pixel_format.is_empty() {
             bail!("encode.pixel_format must not be empty");
         }
+        if let Some(tiling) = &self.tiling
+            && tiling.max_tile == 0
+        {
+            bail!("tiling.max_tile must be at least 1");
+        }
         if self.encode.audio.is_empty() {
             bail!("encode.audio must not be empty (use \"none\" to drop audio)");
         }
         Ok(())
     }
+}
+
+/// Spatial tiling of each frame.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tiling {
+    /// Largest tile edge in source pixels; the frame is split into as few tiles
+    /// as this allows, with a smooth overlap between them.
+    pub max_tile: usize,
 }
 
 /// FFmpeg encoder settings.

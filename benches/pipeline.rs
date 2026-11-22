@@ -122,7 +122,7 @@ fn tensorrt_bench(c: &mut Criterion) {
         .unwrap_or(24);
     let frame = convert::frame_len(W, H);
     let frames: Vec<u8> = (0..t * frame).map(|i| (i % 251) as u8).collect();
-    let mut upscaler = match Upscaler::new(&model, &cache, W, H, t) {
+    let mut upscaler = match Upscaler::new(&model, &cache, W, H, t, None) {
         Ok(upscaler) => upscaler,
         Err(error) => {
             eprintln!("skipping TensorRT bench: {error:#}");

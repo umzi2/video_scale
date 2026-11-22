@@ -111,6 +111,7 @@ fn process(settings: &Settings) -> Result<()> {
         width,
         height,
         config.chunk_size,
+        config.tiling.as_ref().map(|tiling| tiling.max_tile),
     )?;
 
     let mut source = decoder.stdout()?;
