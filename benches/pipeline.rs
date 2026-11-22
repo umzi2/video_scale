@@ -5,7 +5,8 @@
 //!
 //! `BENCH_MODEL=2x_umzi_anime_smovsr_fp16.onnx cargo bench --bench pipeline -- tensorrt`
 //!
-//! `BENCH_CACHE` overrides the engine cache directory (default `.trt-cache`).
+//! `BENCH_CACHE` overrides the engine cache directory (default `.trt-cache`);
+//! `BENCH_T` sets the window size of the TensorRT stage (default 24).
 //! Filtering works as usual: `cargo bench --bench pipeline -- convert/rgb24`.
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
@@ -115,8 +116,13 @@ fn tensorrt_bench(c: &mut Criterion) {
     let cache = env::var_os("BENCH_CACHE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".trt-cache"));
-    let (frames, _) = fixture();
-    let mut upscaler = match Upscaler::new(&model, &cache, W, H, T) {
+    let t = env::var("BENCH_T")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24);
+    let frame = convert::frame_len(W, H);
+    let frames: Vec<u8> = (0..t * frame).map(|i| (i % 251) as u8).collect();
+    let mut upscaler = match Upscaler::new(&model, &cache, W, H, t) {
         Ok(upscaler) => upscaler,
         Err(error) => {
             eprintln!("skipping TensorRT bench: {error:#}");
@@ -126,11 +132,27 @@ fn tensorrt_bench(c: &mut Criterion) {
     let mut out = Vec::new();
     upscaler.infer(&frames, &mut out).unwrap();
 
+    // Explicit frame-rate report: criterion shows per-iteration time, these are the numbers
+    // that describe a video pass (frames/s and the cost of a 2160-frame clip).
+    let iters = 5;
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        upscaler.infer(&frames, &mut out).unwrap();
+    }
+    let window = start.elapsed().as_secs_f64() / iters as f64;
+    let per_frame = window / t as f64;
+    println!(
+        "\n[T={t}] window {window:.2} ms, {:.3} ms per frame, {:.1} frames/s, 2160 frames ~ {:.1} s",
+        per_frame * 1e3,
+        1.0 / per_frame,
+        per_frame * 2160.0
+    );
+
     let mut g = c.benchmark_group("tensorrt");
-    // One warm call is ~75 ms; a handful of samples is plenty and keeps the suite short.
+    // One warm call dominates the time; a handful of samples keeps the suite short.
     g.sample_size(10);
-    g.throughput(Throughput::Elements(T as u64));
-    g.bench_function("infer_window", |b| {
+    g.throughput(Throughput::Elements(t as u64));
+    g.bench_function(format!("infer_{t}_frames"), |b| {
         b.iter(|| upscaler.infer(&frames, &mut out).unwrap())
     });
     g.finish();

@@ -53,5 +53,6 @@ Stage-by-stage criterion benchmarks (640x360, T=5, overlap=2):
 ```
 cargo bench --bench pipeline                          # CPU stages
 BENCH_MODEL=2x_umzi_anime_smovsr_fp16.onnx \
-    cargo bench --bench pipeline -- tensorrt           # + TensorRT inference
+    cargo bench --bench pipeline -- tensorrt           # + TensorRT inference (24-frame window)
+BENCH_T=5 BENCH_MODEL=... cargo bench --bench pipeline -- tensorrt   # other window size
 ```
